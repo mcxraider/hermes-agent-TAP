@@ -2,7 +2,7 @@
 session can't call (Blank Slate audit, Aug 2026).
 
 Covers:
-  * HERMES_AGENT_HELP_GUIDANCE degrades to the docs-only variant when the
+  * DATA_PLATFORM_HELP_GUIDANCE degrades to the docs-only variant when the
     skill tools aren't loaded.
   * execution_guidance_text() never names a web tool, and drops the
     terminal/execute_code/read_file/search_files lines the session's toolset
