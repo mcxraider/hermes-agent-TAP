@@ -587,9 +587,46 @@ def _finish_remote_kernel_result(kernel_result: dict[str, Any], *,
     return json.dumps(result, ensure_ascii=False)
 
 
+def _configured_sandbox_tools() -> frozenset:
+    """``code_execution.sandbox_tools`` ∩ SANDBOX_ALLOWED_TOOLS, or the whole set when unset.
+
+    The operator's ceiling on the RPC bridge. Without it, disabling the ``terminal`` or ``file``
+    toolset does not stop sandbox code reaching those tools: nothing passes ``enabled_tools``, so
+    ``_sandbox_tools_for`` always takes its fall-back-to-everything branch. A name outside
+    SANDBOX_ALLOWED_TOOLS is dropped rather than injected — this narrows, it never widens.
+    """
+    raw = _load_config().get("sandbox_tools")
+    if raw is None:
+        return SANDBOX_ALLOWED_TOOLS
+    if not isinstance(raw, (list, tuple, set)):
+        # Loud, then the old behaviour: a scalar here means the operator tried to close the bridge
+        # and got nothing, which must never be silent (as tools.tool_search.defer, #116404).
+        logger.warning(
+            "code_execution.sandbox_tools is %r, expected a YAML list of tool names "
+            "(e.g. [web_search, web_extract]; null = every sandbox tool) - using every "
+            "sandbox tool.", raw)
+        return SANDBOX_ALLOWED_TOOLS
+    names = {str(n).strip() for n in raw if str(n).strip()}
+    unknown = names - SANDBOX_ALLOWED_TOOLS
+    if unknown:
+        logger.warning(
+            "code_execution.sandbox_tools names %s, which the sandbox cannot expose; "
+            "ignoring those. Available: %s",
+            ", ".join(sorted(unknown)), ", ".join(sorted(SANDBOX_ALLOWED_TOOLS)))
+    # An explicit [] (or a list of only unknown names) means NO tool RPC, which is a legitimate
+    # ask — so return the empty set rather than falling back to everything.
+    return frozenset(names & SANDBOX_ALLOWED_TOOLS)
+
+
 def _sandbox_tools_for(enabled_tools: Optional[list[str]]) -> frozenset:
-    """Enabled ∩ SANDBOX_ALLOWED_TOOLS, or every sandbox tool when the intersection is empty."""
-    return frozenset(SANDBOX_ALLOWED_TOOLS & set(enabled_tools or ())) or SANDBOX_ALLOWED_TOOLS
+    """Enabled ∩ the configured ceiling, or the whole ceiling when the intersection is empty.
+
+    The empty-intersection fall-back is deliberate upstream behaviour (pinned by
+    ``test_nonoverlapping_tools_fallback``); ``code_execution.sandbox_tools`` lowers what it falls
+    back TO, so the contract holds while the operator still gets a hard ceiling.
+    """
+    allowed = _configured_sandbox_tools()
+    return frozenset(allowed & set(enabled_tools or ())) or allowed
 
 
 def _run_remote_per_call(env, env_type: str, code: str, effective_task_id: str,
@@ -945,8 +982,9 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
     }
 
 
-# Registration-time schema (all sandbox tools, configured mode); model_tools.py rebuilds per-session.
-EXECUTE_CODE_SCHEMA = build_execute_code_schema()
+# Registration-time schema (the configured ceiling, configured mode); model_tools.py rebuilds it
+# per-session via _rewrite_execute_code, intersecting the same ceiling with what passed check_fn.
+EXECUTE_CODE_SCHEMA = build_execute_code_schema(_configured_sandbox_tools())
 
 
 def _execute_code_handler(args: dict, **kwargs) -> str:

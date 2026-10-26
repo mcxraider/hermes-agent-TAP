@@ -1981,6 +1981,14 @@ DEFAULT_CONFIG = {
         # rebound per cell — that runtime boundary is the cross-cell enforcement.
         "kernel_idle_timeout": 1800,
         "max_session_kernels": 4,
+        # Which tools model-written sandbox code may call over the RPC bridge, intersected with
+        # SANDBOX_ALLOWED_TOOLS (tools/code_execution_tool.py). null = that whole set, the
+        # historical behaviour. An explicit list is the only way to stop execute_code handing back
+        # a tool `agent.disabled_toolsets` removed: nothing passes the per-call `enabled_tools`
+        # filter, so it is always None and the resolver falls back to everything allowed. A
+        # deployment that disables the `terminal` or `file` toolsets wants this set too, or the
+        # removal only takes the schemas out of context and leaves the tools reachable.
+        "sandbox_tools": None,
     },
     # Tool Search replaces deferred tools in the model-facing array with the
     # tool_search / tool_describe / tool_call bridges and surfaces them on demand.
