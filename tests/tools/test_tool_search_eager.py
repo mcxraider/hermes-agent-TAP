@@ -4,6 +4,7 @@ the blanket one that defers all MCP tools."""
 from unittest import mock
 
 import tools.tool_search as ts
+import tools.tool_search_validation as validation
 
 
 def _defs(*names):
@@ -57,6 +58,39 @@ def test_eager_tool_is_rejected_at_the_bridge():
                            lambda: ts.ToolSearchConfig.from_raw({"eager": ["mcp__qmd__*"]})):
         assert ts.is_deferrable_tool_name(QMD, frozenset(), frozenset(["mcp__qmd__*"])) is False
         assert ts.scoped_deferrable_names(_defs(QMD, DATAGOV)) == frozenset([DATAGOV])
+
+
+def test_eager_does_not_expose_an_unavailable_mcp_writer():
+    """Pinning a name must never grant access to a tool missing from this session."""
+    writer = "mcp__intelligence__intelligence_feedback_publish"
+    cfg = ts.ToolSearchConfig.from_raw({"eager": [writer]})
+    with mock.patch.object(ts, "_registry_toolset", lambda n: "mcp-" + n.split("__")[1]), \
+         mock.patch.object(ts, "load_config_readonly", lambda: cfg):
+        names = _names(ts.assemble_tool_defs(_defs(QMD), context_length=200_000, config=cfg))
+        assert writer not in names
+        assert QMD not in names, "the unpinned reader is still deferred"
+        target, arguments, error = ts.resolve_underlying_call(
+            {"calls": [{"name": writer, "arguments": {}}]},
+            session_tool_names=[QMD, "tool_call"])
+        assert target is None and arguments == {} and error
+        assert "not a known tool name" in error.lower()
+
+
+def test_eager_large_payload_cannot_be_routed_through_tool_call():
+    """The exact long-JSON MCP name stays direct, avoiding the fragile calls wrapper."""
+    writer = "mcp__commercial_scouting__commercial_validate_report"
+    cfg = ts.ToolSearchConfig.from_raw({"eager": [writer]})
+    with mock.patch.object(ts, "_registry_toolset", lambda n: "mcp-" + n.split("__")[1]), \
+         mock.patch.object(validation, "_registry_entry", lambda n: object() if n == writer else None), \
+         mock.patch.object(ts, "load_config_readonly", lambda: cfg):
+        names = _names(ts.assemble_tool_defs(_defs(writer, DATAGOV),
+                                             context_length=200_000, config=cfg))
+        assert writer in names and DATAGOV not in names
+        target, arguments, error = ts.resolve_underlying_call(
+            {"calls": [{"name": writer, "arguments": {"report_json": "x" * 9000}}]},
+            session_tool_names=[writer, DATAGOV, "tool_call"])
+        assert target is None and arguments == {} and error
+        assert "direct" in error.lower()
 
 
 def test_scalar_eager_warns_and_is_ignored():
